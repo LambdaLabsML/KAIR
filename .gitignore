@@ -1,3 +1,4 @@
+model_zoo
 trainsets/trainH/*
 trainsets/trainL/*
 superresolution
