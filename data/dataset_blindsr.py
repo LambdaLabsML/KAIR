@@ -58,18 +58,19 @@ class DatasetBlindSR(data.Dataset):
             rnd_w_H = random.randint(0, max(0, W - self.patch_size))
             img_H = img_H[rnd_h_H:rnd_h_H + self.patch_size, rnd_w_H:rnd_w_H + self.patch_size, :]
 
-            if 'face' in img_name:
+            if 'subject' in self.opt and 'face' == self.opt['subject']:
                 mode = random.choice([0, 4])
-                img_H = util.augment_img(img_H, mode=mode)
             else:
                 mode = random.randint(0, 7)
-                img_H = util.augment_img(img_H, mode=mode)
+            img_H = util.augment_img(img_H, mode=mode)
 
             img_H = util.uint2single(img_H)
             if self.degradation_type == 'bsrgan':
                 img_L, img_H = blindsr.degradation_bsrgan(img_H, self.sf, lq_patchsize=self.lq_patchsize, isp_model=None)
             elif self.degradation_type == 'bsrgan_plus':
                 img_L, img_H = blindsr.degradation_bsrgan_plus(img_H, self.sf, shuffle_prob=self.shuffle_prob, use_sharp=self.use_sharp, lq_patchsize=self.lq_patchsize)
+            elif self.degradation_type == 'simple':
+                img_L, img_H = blindsr.degradation_simple(img_H, self.sf, lq_patchsize=self.lq_patchsize)
 
         else:
             img_H = util.uint2single(img_H)
@@ -77,6 +78,8 @@ class DatasetBlindSR(data.Dataset):
                 img_L, img_H = blindsr.degradation_bsrgan(img_H, self.sf, lq_patchsize=self.lq_patchsize, isp_model=None)
             elif self.degradation_type == 'bsrgan_plus':
                 img_L, img_H = blindsr.degradation_bsrgan_plus(img_H, self.sf, shuffle_prob=self.shuffle_prob, use_sharp=self.use_sharp, lq_patchsize=self.lq_patchsize)
+            elif self.degradation_type == 'simple':
+                img_L, img_H = blindsr.degradation_simple(img_H, self.sf, lq_patchsize=self.lq_patchsize)
 
         # ------------------------------------
         # L/H pairs, HWC to CHW, numpy to tensor

@@ -18,6 +18,9 @@ from utils.utils_dist import get_dist_info, init_dist
 from data.select_dataset import define_Dataset
 from models.select_model import define_Model
 
+from torch.utils.tensorboard import SummaryWriter
+import torchvision
+
 
 '''
 # --------------------------------------------
@@ -170,6 +173,10 @@ def main(json_path='options/train_msrresnet_gan.json'):
     # Step--4 (main training)
     # ----------------------------------------
     '''
+    if opt['rank'] == 0:
+        writer = SummaryWriter(
+            log_dir=os.path.join(opt['path']['log'], logger_name)
+        )
 
     for epoch in range(1000000):  # keep running
         if opt['dist']:
@@ -197,12 +204,21 @@ def main(json_path='options/train_msrresnet_gan.json'):
             # -------------------------------
             # 4) training information
             # -------------------------------
+            logs = model.current_log()  # such as loss
             if current_step % opt['train']['checkpoint_print'] == 0 and opt['rank'] == 0:
-                logs = model.current_log()  # such as loss
                 message = '<epoch:{:3d}, iter:{:8,d}, lr:{:.3e}> '.format(epoch, current_step, model.current_learning_rate())
                 for k, v in logs.items():  # merge log information into message
                     message += '{:s}: {:.3e} '.format(k, v)
                 logger.info(message)
+
+            # ------------------------------
+            # 4.b) Logging metrics
+            # ------------------------------
+            if opt['rank'] == 0:
+                writer.add_scalar("Loss/G_loss", logs["G_loss"], current_step)
+                writer.add_scalar("Loss/D_loss", logs["D_loss"], current_step)
+                writer.add_scalar("Loss/D_fake", logs["D_fake"], current_step)
+                writer.add_scalar("lr", model.current_learning_rate(), current_step)
 
             # -------------------------------
             # 5) save model
@@ -253,6 +269,19 @@ def main(json_path='options/train_msrresnet_gan.json'):
 
                 # testing log
                 logger.info('<epoch:{:3d}, iter:{:8,d}, Average PSNR : {:<.2f}dB\n'.format(epoch, current_step, avg_psnr))
+                if opt['rank'] == 0:
+                    writer.add_scalar("Val PSNR", avg_psnr, current_step)
+                    grid = torchvision.utils.make_grid(E_imgs, nrow=(int(num_test_imgs / 2) + (num_test_imgs % 2 > 0)))
+                    writer.add_image('val_images', grid, current_step)
+
+            # -------------------------------
+            # 7) log input data
+            # -------------------------------
+            if 'checkpoint_data' in opt['train']:
+                bs_train = train_data['L'].shape[0]
+                if current_step % opt['train']['checkpoint_data'] == 0 and opt['rank'] == 0:
+                    grid = torchvision.utils.make_grid(train_data['L'], nrow=(int(bs_train / 2) + (bs_train % 2 > 0)))
+                    writer.add_image('train_images', grid, current_step)
 
 if __name__ == '__main__':
     main()

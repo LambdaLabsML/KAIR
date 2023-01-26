@@ -71,7 +71,6 @@ def parse(opt_path, is_train=True):
 
     path_task = os.path.join(opt['path']['root'], opt['task'])
     opt['path']['task'] = path_task
-    opt['path']['log'] = path_task
     opt['path']['options'] = os.path.join(path_task, 'options')
 
     if is_train:
@@ -171,7 +170,7 @@ def parse(opt_path, is_train=True):
 
 def find_last_checkpoint(save_dir, net_type='G', pretrained_path=None):
     """
-    Args: 
+    Args:
         save_dir: model folder
         net_type: 'G' or 'D' or 'optimizerG' or 'optimizerD'
         pretrained_path: pretrained model path. If save_dir does not have any model, load from pretrained_path

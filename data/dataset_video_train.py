@@ -3,7 +3,6 @@ import random
 import torch
 from pathlib import Path
 import torch.utils.data as data
-from torchvision import transforms
 
 import utils.utils_video as utils_video
 
@@ -303,7 +302,6 @@ class VideoRecurrentTrainVimeoDataset(data.Dataset):
         super(VideoRecurrentTrainVimeoDataset, self).__init__()
         self.opt = opt
         self.gt_root, self.lq_root = Path(opt['dataroot_gt']), Path(opt['dataroot_lq'])
-        self.temporal_scale = opt.get('temporal_scale', 1)
 
         with open(opt['meta_info_file'], 'r') as fin:
             self.keys = [line.split(' ')[0] for line in fin]
@@ -318,14 +316,15 @@ class VideoRecurrentTrainVimeoDataset(data.Dataset):
             self.io_backend_opt['client_keys'] = ['lq', 'gt']
 
         # indices of input images
-        self.neighbor_list = [i + (9 - opt['num_frame']) // 2 for i in range(opt['num_frame'])][::self.temporal_scale]
+        self.neighbor_list = [i + (9 - opt['num_frame']) // 2 for i in range(opt['num_frame'])]
 
         # temporal augmentation configs
         self.random_reverse = opt['random_reverse']
         print(f'Random reverse is {self.random_reverse}.')
 
-        self.mirror_sequence = opt.get('mirror_sequence', False)
+        self.flip_sequence = opt.get('flip_sequence', False)
         self.pad_sequence = opt.get('pad_sequence', False)
+        self.neighbor_list = [1, 2, 3, 4, 5, 6, 7]
 
     def __getitem__(self, index):
         if self.file_client is None:
@@ -371,7 +370,7 @@ class VideoRecurrentTrainVimeoDataset(data.Dataset):
         img_lqs = torch.stack(img_results[:7], dim=0)
         img_gts = torch.stack(img_results[7:], dim=0)
 
-        if self.mirror_sequence:  # mirror the sequence: 7 frames to 14 frames
+        if self.flip_sequence:  # flip the sequence: 7 frames to 14 frames
             img_lqs = torch.cat([img_lqs, img_lqs.flip(0)], dim=0)
             img_gts = torch.cat([img_gts, img_gts.flip(0)], dim=0)
         elif self.pad_sequence:  # pad the sequence: 7 frames to 8 frames
@@ -379,75 +378,9 @@ class VideoRecurrentTrainVimeoDataset(data.Dataset):
             img_gts = torch.cat([img_gts, img_gts[-1:,...]], dim=0)
 
         # img_lqs: (t, c, h, w)
-        # img_gt: (t, c, h, w)
+        # img_gt: (c, h, w)
         # key: str
         return {'L': img_lqs, 'H': img_gts, 'key': key}
 
     def __len__(self):
         return len(self.keys)
-
-class VideoRecurrentTrainVimeoVFIDataset(VideoRecurrentTrainVimeoDataset):
-
-    def __init__(self, opt):
-        super(VideoRecurrentTrainVimeoVFIDataset, self).__init__(opt)
-        self.color_jitter = self.opt.get('color_jitter', False)
-
-        if self.color_jitter:
-            self.transforms_color_jitter = transforms.ColorJitter(0.05, 0.05, 0.05, 0.05)
-
-    def __getitem__(self, index):
-        if self.file_client is None:
-            self.file_client = utils_video.FileClient(self.io_backend_opt.pop('type'), **self.io_backend_opt)
-
-        # random reverse
-        if self.random_reverse and random.random() < 0.5:
-            self.neighbor_list.reverse()
-
-        scale = self.opt['scale']
-        gt_size = self.opt['gt_size']
-        key = self.keys[index]
-        clip, seq = key.split('/')  # key example: 00001/0001
-
-        # get the neighboring LQ and  GT frames
-        img_lqs = []
-        img_gts = []
-        for neighbor in self.neighbor_list:
-            if self.is_lmdb:
-                img_lq_path = f'{clip}/{seq}/im{neighbor}'
-            else:
-                img_lq_path = self.lq_root / clip / seq / f'im{neighbor}.png'
-            # LQ
-            img_bytes = self.file_client.get(img_lq_path, 'lq')
-            img_lq = utils_video.imfrombytes(img_bytes, float32=True)
-            img_lqs.append(img_lq)
-
-        # GT
-        if self.is_lmdb:
-            img_gt_path = f'{clip}/{seq}/im4'
-        else:
-            img_gt_path = self.gt_root / clip / seq / 'im4.png'
-
-        img_bytes = self.file_client.get(img_gt_path, 'gt')
-        img_gt = utils_video.imfrombytes(img_bytes, float32=True)
-        img_gts.append(img_gt)
-
-        # randomly crop
-        img_gts, img_lqs = utils_video.paired_random_crop(img_gts, img_lqs, gt_size, scale, img_gt_path)
-
-        # augmentation - flip, rotate
-        img_lqs.extend([img_gts])
-        img_results = utils_video.augment(img_lqs, self.opt['use_hflip'], self.opt['use_rot'])
-
-        img_results = utils_video.img2tensor(img_results)
-        img_results = torch.stack(img_results, dim=0)
-
-        if self.color_jitter: # same color_jitter for img_lqs and img_gts
-            img_results = self.transforms_color_jitter(img_results)
-
-        img_lqs = img_results[:-1, ...]
-        img_gts = img_results[-1:, ...]
-
-        # img_lqs: (t, c, h, w)
-        # img_gt: (t, c, h, w)
-        # key: str
-        return {'L': img_lqs, 'H': img_gts, 'key': key}

@@ -78,7 +78,7 @@ def get_image_paths(dataroot):
 def _get_paths_from_images(path):
     assert os.path.isdir(path), '{:s} is not a valid directory'.format(path)
     images = []
-    for dirpath, _, fnames in sorted(os.walk(path)):
+    for dirpath, _, fnames in sorted(os.walk(path, followlinks=True)):
         for fname in sorted(fnames):
             if is_image_file(fname):
                 img_path = os.path.join(dirpath, fname)
@@ -89,7 +89,7 @@ def _get_paths_from_images(path):
 
 '''
 # --------------------------------------------
-# split large images into small images 
+# split large images into small images
 # --------------------------------------------
 '''
 
@@ -127,7 +127,7 @@ def imssave(imgs, img_path):
 
 def split_imageset(original_dataroot, taget_dataroot, n_channels=3, p_size=512, p_overlap=96, p_max=800):
     """
-    split the large images from original_dataroot into small overlapped images with size (p_size)x(p_size), 
+    split the large images from original_dataroot into small overlapped images with size (p_size)x(p_size),
     and save them into taget_dataroot; only the images with larger size than (p_max)x(p_max)
     will be splitted.
 
@@ -1004,13 +1004,13 @@ if __name__ == '__main__':
 #    img_tensor = single2tensor4(img)
 #    for i in range(8):
 #        imshow(np.concatenate((augment_img(img, i), tensor2single(augment_img_tensor4(img_tensor, i))), 1))
-    
+
 #    patches = patches_from_image(img, p_size=128, p_overlap=0, p_max=200)
 #    imssave(patches,'a.png')
 
 
-    
-    
-    
-    
-    
+
+
+
+
+

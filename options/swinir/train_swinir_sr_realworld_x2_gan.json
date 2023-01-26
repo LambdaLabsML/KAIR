@@ -1,9 +1,9 @@
 {
-  "task": "swinir_sr_realworld_x4_gan" // real-world image sr. root/task/images|models|options
+  "task": "swinir_sr_realworld_x2_gan" // real-world image sr. root/task/images|models|options
   , "model": "gan"        // "gan"
   , "gpu_ids": [0,1,2,3,4,5,6,7]
 
-  , "scale": 4       // broadcast to "datasets"
+  , "scale": 2       // broadcast to "datasets"
   , "n_channels": 3  // broadcast to "datasets", 1 for grayscale, 3 for color
 
   , "path": {
@@ -11,7 +11,7 @@
     , "pretrained_netG": null  // path of pretrained model
     , "pretrained_netD": null  // path of pretrained model
     , "pretrained_netE": null  // path of pretrained model
-    , "log": "swinir_tb"
+    , "log" : "swinir_tb"
 	}
 
   , "datasets": {
@@ -30,25 +30,26 @@
       , "dataloader_shuffle": true
       , "dataloader_num_workers": 16
       , "dataloader_batch_size": 32      // batch size 1 | 16 | 32 | 48 | 64 | 128. Total batch size =4x8=32 in SwinIR
+      , "subject": "face"
     }
     , "test": {
       "name": "test_dataset"            // just name
       , "dataset_type": "blindsr"
 
-      , "degradation_type": "bsrgan"    // "bsrgan" | "bsrgan_plus" | "simple"
+      , "degradation_type": "simple"    // "bsrgan" | "bsrgan_plus" | "simple"
       , "H_size": 256                   // patch_size 256 | 288 | 320
       , "shuffle_prob": 0.1             //
       , "lq_patchsize": 64
       , "use_sharp": false
 
       , "dataroot_H": "testsets/Set5/original"  // path of H testing dataset
-      , "dataroot_L": "testsets/Set5/LRbicx4"   // path of L testing dataset
+      , "dataroot_L": "testsets/Set5/LRbicx2"   // path of L testing dataset
     }
   }
 
   , "netG": {
     "net_type": "swinir"
-    , "upscale": 4
+    , "upscale": 2
     , "in_chans": 3
     , "img_size": 64
     , "window_size": 8
@@ -118,5 +119,7 @@
     , "checkpoint_test": 5000  // skip testing
     , "checkpoint_save": 5000
     , "checkpoint_print": 200
+    , "checkpoint_data": 100             // for logging input data (checking degredation)
+
   }
 }

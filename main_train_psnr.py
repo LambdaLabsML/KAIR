@@ -18,6 +18,9 @@ from utils.utils_dist import get_dist_info, init_dist
 from data.select_dataset import define_Dataset
 from models.select_model import define_Model
 
+from torch.utils.tensorboard import SummaryWriter
+import torchvision
+
 
 '''
 # --------------------------------------------
@@ -47,6 +50,7 @@ def main(json_path='options/train_msrresnet_psnr.json'):
 
     opt = option.parse(parser.parse_args().opt, is_train=True)
     opt['dist'] = parser.parse_args().dist
+
 
     # ----------------------------------------
     # distributed settings
@@ -163,13 +167,16 @@ def main(json_path='options/train_msrresnet_psnr.json'):
     # Step--4 (main training)
     # ----------------------------------------
     '''
+    if opt['rank'] == 0:
+        writer = SummaryWriter(
+            log_dir=os.path.join(opt['path']['log'], logger_name)
+        )
 
     for epoch in range(1000000):  # keep running
         if opt['dist']:
             train_sampler.set_epoch(epoch)
 
         for i, train_data in enumerate(train_loader):
-
             current_step += 1
 
             # -------------------------------
@@ -190,12 +197,15 @@ def main(json_path='options/train_msrresnet_psnr.json'):
             # -------------------------------
             # 4) training information
             # -------------------------------
+            logs = model.current_log()  # such as loss
             if current_step % opt['train']['checkpoint_print'] == 0 and opt['rank'] == 0:
-                logs = model.current_log()  # such as loss
                 message = '<epoch:{:3d}, iter:{:8,d}, lr:{:.3e}> '.format(epoch, current_step, model.current_learning_rate())
                 for k, v in logs.items():  # merge log information into message
                     message += '{:s}: {:.3e} '.format(k, v)
                 logger.info(message)
+            if opt['rank'] == 0:
+                writer.add_scalar("Loss/G_loss", logs["G_loss"], current_step)
+                writer.add_scalar("lr", model.current_learning_rate(), current_step)
 
             # -------------------------------
             # 5) save model
@@ -207,13 +217,15 @@ def main(json_path='options/train_msrresnet_psnr.json'):
             # -------------------------------
             # 6) testing
             # -------------------------------
+            test_img = next(iter(test_loader))
+            num_test_imgs = len(test_loader)
+            E_imgs = torch.zeros([num_test_imgs, 3, test_img['H'].shape[2], test_img['H'].shape[3]], dtype=torch.float32)
+
             if current_step % opt['train']['checkpoint_test'] == 0 and opt['rank'] == 0:
 
                 avg_psnr = 0.0
-                idx = 0
 
-                for test_data in test_loader:
-                    idx += 1
+                for i_test, test_data in enumerate(test_loader):
                     image_name_ext = os.path.basename(test_data['L_path'][0])
                     img_name, ext = os.path.splitext(image_name_ext)
 
@@ -238,14 +250,30 @@ def main(json_path='options/train_msrresnet_psnr.json'):
                     # -----------------------
                     current_psnr = util.calculate_psnr(E_img, H_img, border=border)
 
-                    logger.info('{:->4d}--> {:>10s} | {:<4.2f}dB'.format(idx, image_name_ext, current_psnr))
+                    logger.info('{:->4d}--> {:>10s} | {:<4.2f}dB'.format(i_test, image_name_ext, current_psnr))
 
                     avg_psnr += current_psnr
 
-                avg_psnr = avg_psnr / idx
+                    E_imgs[i_test] = visuals['E']
+
+                avg_psnr = avg_psnr / num_test_imgs
 
                 # testing log
                 logger.info('<epoch:{:3d}, iter:{:8,d}, Average PSNR : {:<.2f}dB\n'.format(epoch, current_step, avg_psnr))
+                if opt['rank'] == 0:
+                    writer.add_scalar("Val PSNR", avg_psnr, current_step)
+                    grid = torchvision.utils.make_grid(E_imgs, nrow=(int(num_test_imgs / 2) + (num_test_imgs % 2 > 0)))
+                    writer.add_image('val_images', grid, current_step)
+
+            # -------------------------------
+            # 7) log input data
+            # -------------------------------
+            if 'checkpoint_data' in opt['train']:
+                bs_train = train_data['L'].shape[0]
+                if current_step % opt['train']['checkpoint_data'] == 0 and opt['rank'] == 0:
+                    grid = torchvision.utils.make_grid(train_data['L'], nrow=(int(bs_train / 2) + (bs_train % 2 > 0)))
+                    writer.add_image('train_images', grid, current_step)
+
 
 if __name__ == '__main__':
     main()

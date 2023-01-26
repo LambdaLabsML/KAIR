@@ -428,6 +428,61 @@ def random_crop(lq, hq, sf=4, lq_patchsize=64):
     hq = hq[rnd_h_H:rnd_h_H + lq_patchsize*sf, rnd_w_H:rnd_w_H + lq_patchsize*sf, :]
     return lq, hq
 
+def degradation_simple(img, sf=4, lq_patchsize=72):
+    """
+    This is a simple degradation model that only downsizes the input image
+    ----------
+    img: HXWXC, [0, 1], its size should be large than (lq_patchsizexsf)x(lq_patchsizexsf)
+    sf: scale factor
+
+    Returns
+    -------
+    img: low-quality patch, size: lq_patchsizeXlq_patchsizeXC, range: [0, 1]
+    hq: corresponding high-quality patch, size: (lq_patchsizexsf)X(lq_patchsizexsf)XC, range: [0, 1]
+    """
+
+    scale2_prob = 0.25
+    sf_ori = sf
+
+    h1, w1 = img.shape[:2]
+    img = img.copy()[:w1 - w1 % sf, :h1 - h1 % sf, ...]  # mod crop
+    h, w = img.shape[:2]
+
+    if h < lq_patchsize*sf or w < lq_patchsize*sf:
+        raise ValueError(f'img size ({h1}X{w1}) is too small!')
+
+    hq = img.copy()
+
+    if sf == 4 and random.random() < scale2_prob:   # downsample1
+        if np.random.rand() < 0.5:
+            img = cv2.resize(img, (int(1/2*img.shape[1]), int(1/2*img.shape[0])), interpolation=random.choice([1,2,3]))
+        else:
+            img = util.imresize_np(img, 1/2, True)
+        img = np.clip(img, 0.0, 1.0)
+        sf = 2
+
+    a, b = img.shape[1], img.shape[0]
+    # downsample2
+    if random.random() < 0.75:
+        sf1 = random.uniform(1,2*sf)
+        img = cv2.resize(img, (int(1/sf1*img.shape[1]), int(1/sf1*img.shape[0])), interpolation=random.choice([1,2,3]))
+    else:
+        k = fspecial('gaussian', 25, random.uniform(0.1, 0.6*sf))
+        k_shifted = shift_pixel(k, sf)
+        k_shifted = k_shifted/k_shifted.sum()  # blur with shifted kernel
+        img = ndimage.filters.convolve(img, np.expand_dims(k_shifted, axis=2), mode='mirror')
+        img = img[0::sf, 0::sf, ...]  # nearest downsampling
+    img = np.clip(img, 0.0, 1.0)
+
+    # downsample3
+    img = cv2.resize(img, (int(1/sf*a), int(1/sf*b)), interpolation=random.choice([1,2,3]))
+    img = np.clip(img, 0.0, 1.0)
+
+    # random crop
+    img, hq = random_crop(img, hq, sf_ori, lq_patchsize)
+    return img, hq
+
+
 
 def degradation_bsrgan(img, sf=4, lq_patchsize=72, isp_model=None):
     """

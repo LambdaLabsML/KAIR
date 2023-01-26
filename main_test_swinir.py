@@ -6,6 +6,7 @@ from collections import OrderedDict
 import os
 import torch
 import requests
+from pathlib import Path
 
 from models.network_swinir import SwinIR as net
 from utils import utils_image as util
@@ -28,9 +29,16 @@ def main():
     parser.add_argument('--folder_gt', type=str, default=None, help='input ground-truth test image folder')
     parser.add_argument('--tile', type=int, default=None, help='Tile size, None for no tile during testing (testing as a whole)')
     parser.add_argument('--tile_overlap', type=int, default=32, help='Overlapping of different tiles')
+    parser.add_argument('--gpu_idx', type=int, default=None, help='Index of GPU device to use. Default is CPU')
+    parser.add_argument('--folder_out', type=str, default=None, required=True, help='Store the output images here')
     args = parser.parse_args()
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if args.gpu_idx is not None:
+        device = torch.device('cuda', args.gpu_idx)
+        print(f'Using GPU {args.gpu_idx}')
+    else:
+        device = torch.device('cpu')
+        print('Running on CPU only!')
     # set up model
     if os.path.exists(args.model_path):
         print(f'loading model from {args.model_path}')
@@ -40,13 +48,15 @@ def main():
         r = requests.get(url, allow_redirects=True)
         print(f'downloading model {args.model_path}')
         open(args.model_path, 'wb').write(r.content)
-        
+
     model = define_model(args)
     model.eval()
     model = model.to(device)
 
     # setup folder and path
-    folder, save_dir, border, window_size = setup(args)
+    #folder, save_dir, border, window_size = setup(args)
+    folder, border, window_size = setup(args)
+    save_dir = args.folder_out
     os.makedirs(save_dir, exist_ok=True)
     test_results = OrderedDict()
     test_results['psnr'] = []
@@ -56,56 +66,76 @@ def main():
     test_results['psnr_b'] = []
     psnr, ssim, psnr_y, ssim_y, psnr_b = 0, 0, 0, 0, 0
 
-    for idx, path in enumerate(sorted(glob.glob(os.path.join(folder, '*')))):
+    idx = 0
+    for root, dirs, files in os.walk(folder):
+    # for idx, path in enumerate(sorted(glob.glob(os.path.join(folder, '*')))):
         # read image
-        imgname, img_lq, img_gt = get_image_pair(args, path)  # image to HWC-BGR, float32
-        img_lq = np.transpose(img_lq if img_lq.shape[2] == 1 else img_lq[:, :, [2, 1, 0]], (2, 0, 1))  # HCW-BGR to CHW-RGB
-        img_lq = torch.from_numpy(img_lq).float().unsqueeze(0).to(device)  # CHW-RGB to NCHW-RGB
+        for file in files:
+            path = os.path.join(root, file)
 
-        # inference
-        with torch.no_grad():
-            # pad input image to be a multiple of window_size
-            _, _, h_old, w_old = img_lq.size()
-            h_pad = (h_old // window_size + 1) * window_size - h_old
-            w_pad = (w_old // window_size + 1) * window_size - w_old
-            img_lq = torch.cat([img_lq, torch.flip(img_lq, [2])], 2)[:, :, :h_old + h_pad, :]
-            img_lq = torch.cat([img_lq, torch.flip(img_lq, [3])], 3)[:, :, :, :w_old + w_pad]
-            output = test(img_lq, model, args, window_size)
-            output = output[..., :h_old * args.scale, :w_old * args.scale]
+            file_full_path = str(Path(root) / Path(file))
+            print("file full path: ", file_full_path)
+            save_full_path = (Path(save_dir) / Path(root).name)
+            save_full_path.mkdir(parents=True, exist_ok=True)
 
-        # save image
-        output = output.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-        if output.ndim == 3:
-            output = np.transpose(output[[2, 1, 0], :, :], (1, 2, 0))  # CHW-RGB to HCW-BGR
-        output = (output * 255.0).round().astype(np.uint8)  # float32 to uint8
-        cv2.imwrite(f'{save_dir}/{imgname}_SwinIR.png', output)
+            (imgname, imgext) = os.path.splitext(os.path.basename(path))
+            save_full_path = save_full_path / Path(imgname)
+            print(f"{save_full_path}_swinirx4.png")
 
-        # evaluate psnr/ssim/psnr_b
-        if img_gt is not None:
-            img_gt = (img_gt * 255.0).round().astype(np.uint8)  # float32 to uint8
-            img_gt = img_gt[:h_old * args.scale, :w_old * args.scale, ...]  # crop gt
-            img_gt = np.squeeze(img_gt)
+            print("check 0: ", os.path.isfile(save_full_path))
+            if os.path.isfile(save_full_path):
+                continue
 
-            psnr = util.calculate_psnr(output, img_gt, border=border)
-            ssim = util.calculate_ssim(output, img_gt, border=border)
-            test_results['psnr'].append(psnr)
-            test_results['ssim'].append(ssim)
-            if img_gt.ndim == 3:  # RGB image
-                output_y = util.bgr2ycbcr(output.astype(np.float32) / 255.) * 255.
-                img_gt_y = util.bgr2ycbcr(img_gt.astype(np.float32) / 255.) * 255.
-                psnr_y = util.calculate_psnr(output_y, img_gt_y, border=border)
-                ssim_y = util.calculate_ssim(output_y, img_gt_y, border=border)
-                test_results['psnr_y'].append(psnr_y)
-                test_results['ssim_y'].append(ssim_y)
-            if args.task in ['jpeg_car']:
-                psnr_b = util.calculate_psnrb(output, img_gt, border=border)
-                test_results['psnr_b'].append(psnr_b)
-            print('Testing {:d} {:20s} - PSNR: {:.2f} dB; SSIM: {:.4f}; '
-                  'PSNR_Y: {:.2f} dB; SSIM_Y: {:.4f}; '
-                  'PSNR_B: {:.2f} dB.'.
-                  format(idx, imgname, psnr, ssim, psnr_y, ssim_y, psnr_b))
-        else:
-            print('Testing {:d} {:20s}'.format(idx, imgname))
+            imgname, img_lq, img_gt = get_image_pair(args, path)  # image to HWC-BGR, float32
+            img_lq = np.transpose(img_lq if img_lq.shape[2] == 1 else img_lq[:, :, [2, 1, 0]], (2, 0, 1))  # HCW-BGR to CHW-RGB
+            img_lq = torch.from_numpy(img_lq).float().unsqueeze(0).to(device)  # CHW-RGB to NCHW-RGB
+
+            # inference
+            with torch.no_grad():
+                # pad input image to be a multiple of window_size
+                _, _, h_old, w_old = img_lq.size()
+                h_pad = (h_old // window_size + 1) * window_size - h_old
+                w_pad = (w_old // window_size + 1) * window_size - w_old
+                img_lq = torch.cat([img_lq, torch.flip(img_lq, [2])], 2)[:, :, :h_old + h_pad, :]
+                img_lq = torch.cat([img_lq, torch.flip(img_lq, [3])], 3)[:, :, :, :w_old + w_pad]
+                output = test(img_lq, model, args, window_size)
+                output = output[..., :h_old * args.scale, :w_old * args.scale]
+
+            # save image
+            output = output.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+            if output.ndim == 3:
+                output = np.transpose(output[[2, 1, 0], :, :], (1, 2, 0))  # CHW-RGB to HCW-BGR
+            output = (output * 255.0).round().astype(np.uint8)  # float32 to uint8
+            # exit()
+            cv2.imwrite(f'{save_full_path}_swinirx4.png', output)
+
+            # evaluate psnr/ssim/psnr_b
+            if img_gt is not None:
+                img_gt = (img_gt * 255.0).round().astype(np.uint8)  # float32 to uint8
+                img_gt = img_gt[:h_old * args.scale, :w_old * args.scale, ...]  # crop gt
+                img_gt = np.squeeze(img_gt)
+
+                psnr = util.calculate_psnr(output, img_gt, border=border)
+                ssim = util.calculate_ssim(output, img_gt, border=border)
+                test_results['psnr'].append(psnr)
+                test_results['ssim'].append(ssim)
+                if img_gt.ndim == 3:  # RGB image
+                    output_y = util.bgr2ycbcr(output.astype(np.float32) / 255.) * 255.
+                    img_gt_y = util.bgr2ycbcr(img_gt.astype(np.float32) / 255.) * 255.
+                    psnr_y = util.calculate_psnr(output_y, img_gt_y, border=border)
+                    ssim_y = util.calculate_ssim(output_y, img_gt_y, border=border)
+                    test_results['psnr_y'].append(psnr_y)
+                    test_results['ssim_y'].append(ssim_y)
+                if args.task in ['jpeg_car']:
+                    psnr_b = util.calculate_psnrb(output, img_gt, border=border)
+                    test_results['psnr_b'].append(psnr_b)
+                print('Testing {:d} {:20s} - PSNR: {:.2f} dB; SSIM: {:.4f}; '
+                      'PSNR_Y: {:.2f} dB; SSIM_Y: {:.4f}; '
+                      'PSNR_B: {:.2f} dB.'.
+                      format(idx, imgname, psnr, ssim, psnr_y, ssim_y, psnr_b))
+            else:
+                print('Testing {:d} {:20s}'.format(idx, imgname))
+        idx += 1
 
     # summarize psnr/ssim
     if img_gt is not None:
@@ -141,9 +171,9 @@ def define_model(args):
     elif args.task == 'real_sr':
         if not args.large_model:
             # use 'nearest+conv' to avoid block artifacts
-            model = net(upscale=4, in_chans=3, img_size=64, window_size=8,
+            model = net(upscale=args.scale, in_chans=3, img_size=args.training_patch_size, window_size=8,
                         img_range=1., depths=[6, 6, 6, 6, 6, 6], embed_dim=180, num_heads=[6, 6, 6, 6, 6, 6],
-                        mlp_ratio=2, upsampler='nearest+conv', resi_connection='1conv')
+                        mlp_ratio=2, upsampler='nearest+conv', resi_connection='3conv')
         else:
             # larger model size; use '3conv' to save parameters and memory; use ema for GAN training
             model = net(upscale=4, in_chans=3, img_size=64, window_size=8,
@@ -173,10 +203,10 @@ def define_model(args):
                     img_range=255., depths=[6, 6, 6, 6, 6, 6], embed_dim=180, num_heads=[6, 6, 6, 6, 6, 6],
                     mlp_ratio=2, upsampler='', resi_connection='1conv')
         param_key_g = 'params'
-    
+
     pretrained_model = torch.load(args.model_path)
     model.load_state_dict(pretrained_model[param_key_g] if param_key_g in pretrained_model.keys() else pretrained_model, strict=True)
-        
+
     return model
 
 
@@ -211,7 +241,8 @@ def setup(args):
         border = 0
         window_size = 7
 
-    return folder, save_dir, border, window_size
+    #return folder, save_dir, border, window_size
+    return folder, border, window_size
 
 
 def get_image_pair(args, path):
